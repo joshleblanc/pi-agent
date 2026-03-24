@@ -1,6 +1,6 @@
 {
   "packages": [],
-  "lastChangelogVersion": "0.60.0",
+  "lastChangelogVersion": "0.62.0",
   "defaultProvider": "minimax",
   "defaultModel": "MiniMax-M2.5-highspeed",
   "defaultThinkingLevel": "high",
