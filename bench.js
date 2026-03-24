@@ -9,6 +9,7 @@ import * as os from "node:os";
 import { execSync } from "node:child_process";
 import { Nest } from "./extensions/ant-colony/nest.ts";
 import { defaultConcurrency, adapt } from "./extensions/ant-colony/concurrency.ts";
+import { buildImportGraph } from "./extensions/ant-colony/deps.ts";
 
 const COLONY_DIR = path.join(process.cwd(), "extensions", "ant-colony");
 
@@ -22,6 +23,7 @@ const metrics = {
   pheromone_ops_ms: 0,
   task_operations_ms: 0,
   concurrency_adapt_ms: 0,
+  import_graph_ms: 0,
   errors: [],
 };
 
@@ -324,6 +326,52 @@ async function testConcurrencyAdapt() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Test 8: Import Graph Building
+// ═══════════════════════════════════════════════════════════
+async function testImportGraph() {
+  const start = performance.now();
+  
+  try {
+    // Get all .ts files in the ant-colony extension
+    const cwd = process.cwd();
+    const antColonyDir = path.join(cwd, "extensions", "ant-colony");
+    
+    if (!fs.existsSync(antColonyDir)) {
+      metrics.errors.push("ant-colony directory not found");
+      return;
+    }
+    
+    const files = [];
+    function collectTsFiles(dir) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory() && !entry.name.startsWith(".")) {
+          collectTsFiles(fullPath);
+        } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+          files.push(path.relative(cwd, fullPath));
+        }
+      }
+    }
+    
+    collectTsFiles(antColonyDir);
+    
+    if (files.length > 0) {
+      const graph = buildImportGraph(files, cwd);
+      
+      if (graph.imports.size === 0) {
+        metrics.errors.push("Import graph is empty");
+      }
+    }
+    
+    metrics.import_graph_ms = performance.now() - start;
+    
+  } catch (e) {
+    metrics.errors.push("Import graph error: " + e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 // Main Benchmark Runner
 // ═══════════════════════════════════════════════════════════
 async function runBenchmark() {
@@ -358,6 +406,9 @@ async function runBenchmark() {
   console.log("Running concurrency adaptation test...");
   await testConcurrencyAdapt();
   
+  console.log("Running import graph test...");
+  await testImportGraph();
+  
   const total_ms = performance.now() - overallStart;
   
   // Output results
@@ -377,6 +428,7 @@ async function runBenchmark() {
   console.log("METRIC pheromone_ops_ms=" + (metrics.pheromone_ops_ms || 0).toFixed(2));
   console.log("METRIC task_operations_ms=" + (metrics.task_operations_ms || 0).toFixed(2));
   console.log("METRIC concurrency_adapt_ms=" + (metrics.concurrency_adapt_ms || 0).toFixed(2));
+  console.log("METRIC import_graph_ms=" + (metrics.import_graph_ms || 0).toFixed(2));
   console.log("METRIC total_ms=" + total_ms.toFixed(2));
   console.log("METRIC path_errors=" + pathErrors);
   console.log("METRIC error_count=" + metrics.errors.length);
