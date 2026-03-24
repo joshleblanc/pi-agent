@@ -1,6 +1,6 @@
 /**
- * Ant Colony Windows Benchmark
- * Measures path handling, lock mechanism, and shell execution performance
+ * Ant Colony Windows Benchmark - Enhanced
+ * Measures path handling, lock mechanism, shell execution, and colony operations
  */
 
 import * as fs from "node:fs";
@@ -8,6 +8,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 import { Nest } from "./extensions/ant-colony/nest.ts";
+import { defaultConcurrency, adapt } from "./extensions/ant-colony/concurrency.ts";
 
 const COLONY_DIR = path.join(process.cwd(), "extensions", "ant-colony");
 
@@ -19,6 +20,8 @@ const metrics = {
   path_normalize_ms: 0,
   shell_exec_ms: 0,
   pheromone_ops_ms: 0,
+  task_operations_ms: 0,
+  concurrency_adapt_ms: 0,
   errors: [],
 };
 
@@ -46,13 +49,12 @@ async function testNestInit() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Test 2: Lock Mechanism (spin-wait simulation)
+// Test 2: Lock Mechanism
 // ═══════════════════════════════════════════════════════════
 async function testLockMechanism() {
   const start = performance.now();
   const lockFile = path.join(os.tmpdir(), "ant-colony-test-lock-" + Date.now() + ".json");
   
-  const SPIN_MS = 5;
   const MAX_WAIT = 1000;
   const startTime = Date.now();
   
@@ -65,7 +67,8 @@ async function testLockMechanism() {
         if (Date.now() - startTime > MAX_WAIT) {
           break;
         }
-        const until = Date.now() + SPIN_MS + Math.random() * SPIN_MS * 2;
+        const jitter = 1 + Math.random() * 3;
+        const until = Date.now() + jitter;
         while (Date.now() < until) { /* spin */ }
       }
     }
@@ -79,7 +82,7 @@ async function testLockMechanism() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Test 3: Path Normalization (Windows edge cases)
+// Test 3: Path Normalization
 // ═══════════════════════════════════════════════════════════
 async function testPathNormalization() {
   const start = performance.now();
@@ -90,6 +93,8 @@ async function testPathNormalization() {
     ".\\extensions\\ant-colony\\spawner.ts",
     "\\\\UNC\\path\\to\\share",
     "C:/mixed/slashes/tsconfig.json",
+    "C:\\Program Files\\nodejs\\node.exe",
+    "C:\\Users\\jlebl\\.pi\\agent\\extensions\\ant-colony\\nest.ts",
   ];
   
   let errors = 0;
@@ -100,6 +105,8 @@ async function testPathNormalization() {
       path.dirname(p);
       path.relative(p, path.join(p, "..", "sibling"));
       path.normalize(p);
+      path.isAbsolute(p);
+      path.parse(p);
     } catch (e) {
       errors++;
       metrics.errors.push("Path error for \"" + p + "\": " + e);
@@ -111,7 +118,7 @@ async function testPathNormalization() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Test 4: Shell Execution (Windows cmd.exe)
+// Test 4: Shell Execution
 // ═══════════════════════════════════════════════════════════
 async function testShellExecution() {
   const isWindows = process.platform === "win32";
@@ -141,7 +148,7 @@ async function testShellExecution() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Test 5: Pheromone Operations (append + read)
+// Test 5: Pheromone Operations
 // ═══════════════════════════════════════════════════════════
 async function testPheromoneOps() {
   const start = performance.now();
@@ -152,7 +159,7 @@ async function testPheromoneOps() {
     
     const nest = new Nest(testDir, "bench");
     
-    // Simulate pheromone drops (like in spawner.ts)
+    // Simulate pheromone drops
     for (let i = 0; i < 50; i++) {
       nest.dropPheromone({
         id: "p-" + i,
@@ -192,9 +199,10 @@ async function testPheromoneOps() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Test 6: Task Operations
+// Test 6: Task Operations (with batching)
 // ═══════════════════════════════════════════════════════════
 async function testTaskOps() {
+  const start = performance.now();
   const testDir = path.join(os.tmpdir(), "ant-colony-task-" + Date.now());
   
   try {
@@ -202,7 +210,7 @@ async function testTaskOps() {
     
     const nest = new Nest(testDir, "bench");
     
-    // Initialize with some tasks
+    // Initialize with state
     nest.init({
       id: "bench",
       goal: "Benchmark test",
@@ -233,8 +241,8 @@ async function testTaskOps() {
       finishedAt: null,
     });
     
-    // Add some tasks
-    for (let i = 0; i < 10; i++) {
+    // Add many tasks with batching
+    for (let i = 0; i < 20; i++) {
       nest.writeTask({
         id: "t-" + i,
         parentId: null,
@@ -242,8 +250,8 @@ async function testTaskOps() {
         description: "Benchmark task " + i,
         caste: "worker",
         status: "pending",
-        priority: 3,
-        files: ["file" + i + ".ts"],
+        priority: (i % 5) + 1,
+        files: ["file" + (i % 5) + ".ts"],
         claimedBy: null,
         result: null,
         error: null,
@@ -254,16 +262,28 @@ async function testTaskOps() {
       });
     }
     
-    // Claim and complete some tasks
-    const claimed = nest.claimNextTask("worker", "bench");
-    if (claimed) {
-      nest.updateTaskStatus(claimed.id, "done", "Completed");
+    // Flush pending writes
+    if (typeof nest.flushTaskWrites === "function") {
+      nest.flushTaskWrites();
     }
     
-    // Test claimNextTask pheromone scoring
+    // Claim and complete some tasks
+    for (let i = 0; i < 5; i++) {
+      const claimed = nest.claimNextTask("worker", "bench");
+      if (claimed) {
+        nest.updateTaskStatus(claimed.id, "done", "Completed");
+      }
+    }
+    
+    // Flush pending writes again
+    if (typeof nest.flushTaskWrites === "function") {
+      nest.flushTaskWrites();
+    }
+    
+    // Test getAllTasks
     const allTasks = nest.getAllTasks();
     
-    metrics.load_ms = 1; // Simplified for now
+    metrics.task_operations_ms = performance.now() - start;
     
     // Cleanup
     nest.destroy();
@@ -273,6 +293,34 @@ async function testTaskOps() {
   } finally {
     try { fs.rmSync(testDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Test 7: Concurrency Adaptation
+// ═══════════════════════════════════════════════════════════
+async function testConcurrencyAdapt() {
+  const start = performance.now();
+  
+  const config = defaultConcurrency();
+  
+  // Simulate multiple rounds of adaptation
+  for (let round = 0; round < 100; round++) {
+    config.history.push({
+      timestamp: Date.now(),
+      concurrency: config.current,
+      cpuLoad: 0.3 + Math.random() * 0.3,
+      memFree: 2 * 1024 * 1024 * 1024,
+      throughput: 0.5 + Math.random() * 0.5,
+    });
+    if (config.history.length > 30) {
+      config.history.shift();
+    }
+    
+    const next = adapt(config, 5);
+    Object.assign(config, next);
+  }
+  
+  metrics.concurrency_adapt_ms = performance.now() - start;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -307,6 +355,9 @@ async function runBenchmark() {
   console.log("Running task operations test...");
   await testTaskOps();
   
+  console.log("Running concurrency adaptation test...");
+  await testConcurrencyAdapt();
+  
   const total_ms = performance.now() - overallStart;
   
   // Output results
@@ -314,16 +365,18 @@ async function runBenchmark() {
   console.log("RESULTS");
   console.log("═══════════════════════════════════════════════════════");
   
-  // Primary metric (combined initialization + operations)
-  const primaryMs = metrics.nest_init_ms + metrics.pheromone_ops_ms;
+  // Primary metric (core operations)
+  const primaryMs = (metrics.nest_init_ms || 0) + (metrics.pheromone_ops_ms || 0) + (metrics.task_operations_ms || 0);
   console.log("\nMETRIC load_ms=" + primaryMs.toFixed(2));
   
   // Secondary metrics
-  console.log("METRIC nest_init_ms=" + metrics.nest_init_ms.toFixed(2));
-  console.log("METRIC lock_contention_ms=" + metrics.lock_contention_ms.toFixed(2));
-  console.log("METRIC path_normalize_ms=" + metrics.path_normalize_ms.toFixed(2));
-  console.log("METRIC shell_exec_ms=" + metrics.shell_exec_ms.toFixed(2));
-  console.log("METRIC pheromone_ops_ms=" + metrics.pheromone_ops_ms.toFixed(2));
+  console.log("METRIC nest_init_ms=" + (metrics.nest_init_ms || 0).toFixed(2));
+  console.log("METRIC lock_contention_ms=" + (metrics.lock_contention_ms || 0).toFixed(2));
+  console.log("METRIC path_normalize_ms=" + (metrics.path_normalize_ms || 0).toFixed(2));
+  console.log("METRIC shell_exec_ms=" + (metrics.shell_exec_ms || 0).toFixed(2));
+  console.log("METRIC pheromone_ops_ms=" + (metrics.pheromone_ops_ms || 0).toFixed(2));
+  console.log("METRIC task_operations_ms=" + (metrics.task_operations_ms || 0).toFixed(2));
+  console.log("METRIC concurrency_adapt_ms=" + (metrics.concurrency_adapt_ms || 0).toFixed(2));
   console.log("METRIC total_ms=" + total_ms.toFixed(2));
   console.log("METRIC path_errors=" + pathErrors);
   console.log("METRIC error_count=" + metrics.errors.length);
