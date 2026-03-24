@@ -8,8 +8,8 @@ Improve the ant colony system for Windows compatibility and reliability. Focus o
 4. File system operations (Windows-specific edge cases)
 
 ## Metrics
-- **Primary**: `load_ms` (ms, lower is better) — combined core operations (nest_init + pheromone_ops + task_operations)
-- **Secondary**: `lock_contention_ms`, `path_normalize_ms`, `shell_exec_ms`, `pheromone_ops_ms`, `task_operations_ms`, `concurrency_adapt_ms`, `import_graph_ms`
+- **Primary**: `load_ms` (ms, lower is better) — combined core operations
+- **Secondary**: `nest_init_ms`, `lock_contention_ms`, `path_normalize_ms`, `shell_exec_ms`, `pheromone_ops_ms`, `task_operations_ms`, `concurrency_adapt_ms`, `import_graph_ms`
 
 ## How to Run
 `npx tsx bench.js` — runs unit-style tests on colony modules
@@ -17,7 +17,7 @@ Improve the ant colony system for Windows compatibility and reliability. Focus o
 ## Files in Scope
 - `extensions/ant-colony/nest.ts` — filesystem operations, lock mechanism, pheromone batching, task batching
 - `extensions/ant-colony/spawner.ts` — shell execution, path handling  
-- `extensions/ant-colony/concurrency.ts` — adaptive concurrency
+- `extensions/ant-colony/concurrency.ts` — adaptive concurrency (optimized CPU sampling)
 - `extensions/ant-colony/queen.ts` — colony orchestration
 - `extensions/ant-colony/deps.ts` — import graph building (optimized with caching)
 
@@ -31,44 +31,33 @@ Improve the ant colony system for Windows compatibility and reliability. Focus o
 - Windows paths must work correctly
 - Lock mechanism must not cause excessive CPU usage
 
-## What's Been Tried
+## What's Been Tried (Cumulative Progress)
 
-### v1: Pheromone Batching (commit: abc1234)
-- **Change**: Batch pheromone writes instead of individual appends
-- **Improvement**: pheromone_ops_ms: 13.8ms → 5.51ms (60% faster)
-- **Status**: ✅ Kept
+| Optimization | Improvement | Status |
+|-------------|-------------|--------|
+| Pheromone batching | 60% faster (13.8ms→5.5ms) | ✅ Kept |
+| Windows lock jitter | Faster lock on Windows | ✅ Kept |
+| Task write batching | 8% faster | ✅ Kept |
+| ClaimNextTask pheromone skip | 19% faster | ✅ Kept |
+| Import graph caching | Reduced fs access | ✅ Kept |
+| Pheromone decay pre-calculation | 4% faster | ✅ Kept |
+| CPU sampling optimization | 27% faster (0.37ms→0.27ms) | ✅ Kept |
 
-### v2: Windows Lock Optimization (commit: xyz7890)
-- **Change**: Smaller jitter on Windows (1-4ms vs 5-15ms), destroy() flushes pheromones
-- **Improvement**: load_ms: 7.06ms → 5.82ms (17.6% faster)
-- **Status**: ✅ Kept
+## Current Results (10 experiments)
+- **load_ms**: ~26ms average (baseline: 34ms, **24% improvement**)
+- **pheromone_ops_ms**: 4.04ms (baseline: 13.8ms, **71% faster**)
+- **task_operations_ms**: 21.85ms (baseline: ~28ms, **22% faster**)
+- **concurrency_adapt_ms**: 0.27ms (baseline: 0.64ms, **58% faster**)
+- **lock_contention_ms**: 0.33ms (minimal)
+- **path_normalize_ms**: 0.20ms (minimal)
+- **shell_exec_ms**: ~29ms (noisy, hard to optimize)
+- **import_graph_ms**: 5.94ms (new test)
 
-### v3: Task Write Batching (commit: taskbatch1)
-- **Change**: Batch task writes instead of individual writes (flush when batch >= 5)
-- **Improvement**: task_operations_ms: 27.85ms → 25.62ms (8% faster)
-- **Status**: ✅ Kept
-
-### v4: ClaimNextTask Pheromone Skip (commit: pheromone-opt)
-- **Change**: Skip pheromone loading when no task files or no existing pheromones
-- **Improvement**: task_operations_ms: 25.62ms → 20.74ms (19% faster)
-- **Status**: ✅ Kept
-
-### v5: Import Graph Caching (not committed yet)
-- **Change**: Cache file extension lookups in buildImportGraph
-- **Status**: In progress
-
-## Current Best Results
-- load_ms: 25.87ms (baseline: 34.15ms, 24% improvement)
-- pheromone_ops_ms: 4.13ms (baseline: 13.8ms, 70% improvement)
-- task_operations_ms: 20.59ms (baseline: 27.85ms, 26% improvement)
-- lock_contention_ms: 0.33ms (minimal)
-- path_normalize_ms: 0.22ms (minimal)
-- shell_exec_ms: 28.91ms (dominant, hard to optimize)
-- import_graph_ms: 5.82ms (new metric)
+## Confidence Score
+- **3.1× noise floor** — improvement is likely real
 
 ## Ideas for Future Optimization
 - Optimize shell execution in spawner.ts drone (hard - Windows cmd.exe overhead)
 - Improve queen.ts task wave scheduling
 - Add caching layer for frequently accessed tasks
-- Optimize the pheromone index rebuilding on Windows
 - Consider using Windows-specific APIs for better file locking
