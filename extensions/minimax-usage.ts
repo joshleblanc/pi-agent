@@ -46,7 +46,7 @@ const PLAN_TYPES: PlanInfo[] = [
   { name: "hailuo", modelPattern: /hailuo|video/i, displayName: "Hailuo", icon: "🎬" },
 ];
 
-const API_URL = "https://www.minimax.io/v1/api/openplatform/coding_plan/remains";
+const API_URL = "https://api.minimax.io/v1/api/openplatform/coding_plan/remains";
 const CACHE_TTL = 60000; // 1 minute cache
 
 let interval: number;
@@ -74,6 +74,8 @@ export default function (pi: ExtensionAPI) {
           "Accept": "application/json"
         },
       });
+
+      console.log(response);
 
       if (!response.ok) return null;
 
