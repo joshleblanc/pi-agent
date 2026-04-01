@@ -75,8 +75,6 @@ export default function (pi: ExtensionAPI) {
         },
       });
 
-      console.log(response);
-
       if (!response.ok) return null;
 
       cachedUsage = await response.json();
