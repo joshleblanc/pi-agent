@@ -14,6 +14,9 @@
  * - generate_video_with_subject: Generate videos with subject reference
  * - query_video: Query video generation status
  * - download_video: Get video download URL
+ * - list_voices: List available voices for text-to-speech
+ * - text_to_audio: Convert text to audio with a given voice
+ * - voice_clone: Clone a voice using audio files
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -1934,6 +1937,438 @@ Your music is being generated. Please try again in a moment to retrieve the comp
         return {
           content: [{ type: "text", text: `❌ **Video Download Error:**\n\n${errorMessage}` }],
           details: { error: errorMessage, fileId: params.file_id },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register list_voices tool
+  pi.registerTool({
+    name: "list_voices",
+    label: "List Voices",
+    description: `List all available voices for text-to-speech.\n\n    Returns system voices and voice cloning voices with their names and IDs.\n    Use voice_id from the list when using text_to_audio.`,
+    parameters: Type.Object({
+      voice_type: Type.Optional(
+        Type.String({
+          description: "Type of voices to list",
+          enum: ["all", "system", "voice_cloning"],
+          default: "all",
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/get_voice`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Listing voices...` }],
+        details: { status: "listing", voiceType: params.voice_type || "all" },
+      });
+
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify({ voice_type: params.voice_type || "all" }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result = await response.json();
+
+        // Check for API error
+        if (result.base_resp?.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp?.status_code}): ${result.base_resp?.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Available Voices\n\n`;
+
+        const systemVoices = result.system_voice || [];
+        const voiceCloningVoices = result.voice_cloning || [];
+
+        if (systemVoices.length > 0) {
+          output += `### System Voices\n\n`;
+          for (const voice of systemVoices) {
+            output += `- **${voice.voice_name}**: \`${voice.voice_id}\`\n`;
+          }
+          output += `\n`;
+        }
+
+        if (voiceCloningVoices.length > 0) {
+          output += `### Voice Cloning Voices\n\n`;
+          for (const voice of voiceCloningVoices) {
+            output += `- **${voice.voice_name}**: \`${voice.voice_id}\`\n`;
+          }
+          output += `\n`;
+        }
+
+        if (systemVoices.length === 0 && voiceCloningVoices.length === 0) {
+          output += `No voices found.`;
+        }
+
+        output += `\n---\nUse the voice_id with text_to_audio to generate speech with a specific voice.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            systemVoices: systemVoices.map(v => ({ name: v.voice_name, id: v.voice_id })),
+            voiceCloningVoices: voiceCloningVoices.map(v => ({ name: v.voice_name, id: v.voice_id })),
+            totalCount: systemVoices.length + voiceCloningVoices.length,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **List Voices Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register text_to_audio tool
+  pi.registerTool({
+    name: "text_to_audio",
+    label: "Text to Audio",
+    description: `Convert text to audio with a given voice.\n\n    Generates speech from text with customizable voice settings including speed, pitch, volume, emotion, and language boost.\n    \n    Note: Audio URLs expire after 24 hours - download promptly.`,
+    parameters: Type.Object({
+      text: Type.String({
+        description: "The text to convert to speech",
+      }),
+      voice_id: Type.Optional(
+        Type.String({
+          description: "Voice ID to use (e.g., 'female-shaonv', 'male-qn-qingse', 'Charming_Lady'). Use list_voices to see available options.",
+          default: "female-shaonv",
+        })
+      ),
+      model: Type.Optional(
+        Type.String({
+          description: "Model to use for speech generation",
+          default: "speech-2.6-hd",
+        })
+      ),
+      speed: Type.Optional(
+        Type.Number({
+          description: "Speed of the generated audio (0.5 to 2.0, default 1.0)",
+          minimum: 0.5,
+          maximum: 2.0,
+          default: 1.0,
+        })
+      ),
+      vol: Type.Optional(
+        Type.Number({
+          description: "Volume of the generated audio (0 to 10, default 1.0)",
+          minimum: 0,
+          maximum: 10,
+          default: 1.0,
+        })
+      ),
+      pitch: Type.Optional(
+        Type.Number({
+          description: "Pitch of the generated audio (-12 to 12, default 0)",
+          minimum: -12,
+          maximum: 12,
+          default: 0,
+        })
+      ),
+      emotion: Type.Optional(
+        Type.String({
+          description: "Emotion of the generated audio",
+          enum: ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral"],
+          default: "happy",
+        })
+      ),
+      sample_rate: Type.Optional(
+        Type.Number({
+          description: "Audio sample rate in Hz",
+          enum: [8000, 16000, 22050, 24000, 32000, 44100],
+          default: 32000,
+        })
+      ),
+      bitrate: Type.Optional(
+        Type.Number({
+          description: "Audio bitrate in bps",
+          enum: [32000, 64000, 128000, 256000],
+          default: 128000,
+        })
+      ),
+      channel: Type.Optional(
+        Type.Number({
+          description: "Audio channel (1 = mono, 2 = stereo)",
+          enum: [1, 2],
+          default: 1,
+        })
+      ),
+      format: Type.Optional(
+        Type.String({
+          description: "Audio format",
+          enum: ["mp3", "pcm", "flac"],
+          default: "mp3",
+        })
+      ),
+      language_boost: Type.Optional(
+        Type.String({
+          description: "Language boost for better recognition",
+          enum: ["Chinese", "Chinese,Yue", "English", "Arabic", "Russian", "Spanish", "French", "Portuguese", "German", "Turkish", "Dutch", "Ukrainian", "Vietnamese", "Indonesian", "Japanese", "Italian", "Korean", "Thai", "Polish", "Romanian", "Greek", "Czech", "Finnish", "Hindi", "auto"],
+          default: "auto",
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/t2a_v2`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Generating audio...` }],
+        details: { status: "generating", voiceId: params.voice_id },
+      });
+
+      try {
+        const payload: Record<string, unknown> = {
+          model: params.model || "speech-2.6-hd",
+          text: params.text,
+          voice_setting: {
+            voice_id: params.voice_id || "female-shaonv",
+            speed: params.speed ?? 1.0,
+            vol: params.vol ?? 1.0,
+            pitch: params.pitch ?? 0,
+            emotion: params.emotion || "happy",
+          },
+          audio_setting: {
+            sample_rate: params.sample_rate ?? 32000,
+            bitrate: params.bitrate ?? 128000,
+            format: params.format || "mp3",
+            channel: params.channel ?? 1,
+          },
+          language_boost: params.language_boost || "auto",
+          output_format: "url",
+        };
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result = await response.json();
+
+        // Check for API error
+        if (result.base_resp?.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp?.status_code}): ${result.base_resp?.status_msg}`);
+        }
+
+        const audioUrl = normalizeUrl(result.data?.audio || "");
+
+        // Format output
+        let output = `## Generated Audio\n\n`;
+        output += `**Text:** ${params.text.substring(0, 200)}${params.text.length > 200 ? "..." : ""}\n\n`;
+        output += `**Voice:** ${params.voice_id || "female-shaonv"}\n`;
+        output += `**Model:** ${params.model || "speech-2.6-hd"}\n`;
+        output += `**Speed:** ${params.speed ?? 1.0}x\n`;
+        output += `**Emotion:** ${params.emotion || "happy"}\n`;
+        output += `**Format:** ${params.format || "mp3"} | **Sample Rate:** ${params.sample_rate ?? 32000}Hz | **Bitrate:** ${(params.bitrate ?? 128000) / 1000}kbps\n\n`;
+
+        if (audioUrl) {
+          output += `### Audio URL\n\n`;
+          output += `**URL:** ${audioUrl}\n\n`;
+          output += `**Listen:** ${audioUrl}\n\n`;
+        }
+
+        output += `⚠️ **Note:** Audio URLs expire after 24 hours - download promptly.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            voiceId: params.voice_id,
+            model: params.model || "speech-2.6-hd",
+            speed: params.speed,
+            emotion: params.emotion,
+            format: params.format,
+            audioUrl,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Text to Audio Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register voice_clone tool
+  pi.registerTool({
+    name: "voice_clone",
+    label: "Voice Clone",
+    description: `Clone a voice using an audio file.\n\n    Creates a new voice based on an audio sample. The cloned voice can be used with text_to_audio.\n    \n    Note: Voice cloning is charged upon first use after cloning.`,
+    parameters: Type.Object({
+      voice_id: Type.String({
+        description: "ID for the cloned voice (e.g., 'my-cloned-voice')",
+      }),
+      audio: Type.String({
+        description: "URL or local path to the audio file to clone (MP3, WAV, etc.)",
+        examples: [
+          "https://example.com/voice-sample.mp3",
+          "./my-voice.mp3",
+          "/home/user/recordings/voice.wav",
+        ],
+      }),
+      text: Type.Optional(
+        Type.String({
+          description: "Optional text to generate a demo audio with the cloned voice",
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Cloning voice...` }],
+        details: { status: "cloning", voiceId: params.voice_id },
+      });
+
+      try {
+        // Step 1: Upload the audio file
+        let audioData: ArrayBuffer;
+
+        if (params.audio.startsWith("http://") || params.audio.startsWith("https://")) {
+          // Download from URL
+          const audioResponse = await fetch(params.audio);
+          if (!audioResponse.ok) {
+            throw new Error(`Failed to download audio from URL: ${audioResponse.status} ${audioResponse.statusText}`);
+          }
+          audioData = await audioResponse.arrayBuffer();
+        } else {
+          // Read local file
+          const fs = await import('fs/promises');
+          const path = await import('path');
+          const resolvedPath = path.resolve(params.audio);
+          audioData = await fs.readFile(resolvedPath);
+        }
+
+        onUpdate?.({
+          content: [{ type: "text", text: `Uploading audio file...` }],
+          details: { status: "uploading" },
+        });
+
+        // Create form data for file upload
+        const formData = new FormData();
+        const blob = new Blob([audioData]);
+        formData.append('file', blob, 'audio.mp3');
+        formData.append('purpose', 'voice_clone');
+
+        const uploadResponse = await fetch(`${config.apiHost}/v1/files/upload`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: formData,
+        });
+
+        if (!uploadResponse.ok) {
+          const errorText = await uploadResponse.text();
+          throw new Error(`Failed to upload audio file (${uploadResponse.status}): ${errorText}`);
+        }
+
+        const uploadResult = await uploadResponse.json();
+        const fileId = uploadResult.file?.file_id;
+
+        if (!fileId) {
+          throw new Error("Failed to get file_id from upload response");
+        }
+
+        onUpdate?.({
+          content: [{ type: "text", text: `Processing voice clone...` }],
+          details: { status: "processing" },
+        });
+
+        // Step 2: Clone the voice
+        const clonePayload: Record<string, unknown> = {
+          file_id: fileId,
+          voice_id: params.voice_id,
+        };
+
+        if (params.text) {
+          clonePayload.text = params.text;
+          clonePayload.model = "speech-2.6-hd";
+        }
+
+        const cloneResponse = await fetch(`${config.apiHost}/v1/voice_clone`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(clonePayload),
+        });
+
+        if (!cloneResponse.ok) {
+          const errorText = await cloneResponse.text();
+          throw new Error(`Voice clone failed (${cloneResponse.status}): ${errorText}`);
+        }
+
+        const cloneResult = await cloneResponse.json();
+
+        // Check for API error
+        if (cloneResult.base_resp?.status_code !== 0) {
+          throw new Error(`MiniMax API error (${cloneResult.base_resp?.status_code}): ${cloneResult.base_resp?.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Voice Cloned Successfully\n\n`;
+        output += `**Voice ID:** \`${params.voice_id}\`\n\n`;
+
+        if (cloneResult.demo_audio) {
+          const demoUrl = normalizeUrl(cloneResult.demo_audio);
+          output += `### Demo Audio\n\n`;
+          output += `**URL:** ${demoUrl}\n\n`;
+          output += `**Listen:** ${demoUrl}\n\n`;
+        } else {
+          output += `Demo audio will be available shortly.\n\n`;
+        }
+
+        output += `Use \`${params.voice_id}\` as the voice_id in text_to_audio to generate speech with this cloned voice.\n\n`;
+        output += `⚠️ **Note:** Voice cloning is charged upon first use after cloning.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            voiceId: params.voice_id,
+            fileId,
+            demoAudioUrl: cloneResult.demo_audio ? normalizeUrl(cloneResult.demo_audio) : undefined,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Voice Clone Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, voiceId: params.voice_id },
           isError: true,
         };
       }

@@ -1,8 +1,8 @@
 {
   "packages": [],
-  "lastChangelogVersion": "0.62.0",
+  "lastChangelogVersion": "0.64.0",
   "defaultProvider": "minimax",
-  "defaultModel": "MiniMax-M2.5-highspeed",
+  "defaultModel": "MiniMax-M2.7-highspeed",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "transport": "sse"
