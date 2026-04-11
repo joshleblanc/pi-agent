@@ -1,14 +1,14 @@
 /**
  * Ask User Extension
  * 
- * Enables the agent to ask clarifying questions when it needs more information.
- * Use cases:
- * - Project type ambiguity (e.g., "Is this a Node.js project or Python?")
- * - File not found scenarios
- * - Unclear requirements
- * - Technology preferences
+ * Enables the agent to ask clarifying questions mid-response and continue generating
+ * with the user's input incorporated into the response.
  * 
- * The agent can call the `ask_user` tool with a question and optional choices.
+ * Key features:
+ * - Blocks LLM mid-generation for user input
+ * - Returns structured response the LLM can seamlessly continue from
+ * - Supports options, custom input, and open-ended questions
+ * - Works in both streaming and non-streaming contexts
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -61,7 +61,8 @@ export default function askUser(pi: ExtensionAPI) {
 			"- You need user preferences or guidance\n" +
 			"- Requirements are ambiguous\n" +
 			"- You want to confirm before making significant changes\n\n" +
-			"Provide options when possible to help the user answer quickly, but you can also ask open-ended questions.",
+			"Provide options when possible to help the user answer quickly, but you can also ask open-ended questions.\n\n" +
+			"The user will be prompted mid-response and you will receive their answer to continue.",
 		parameters: AskUserParams,
 		promptGuidelines: [
 			"Use this tool when you encounter ambiguity or need user guidance",
@@ -72,11 +73,13 @@ export default function askUser(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!ctx.hasUI) {
+				// In non-interactive mode, we can't prompt the user
+				// Return a structured response that tells the LLM to proceed with a default
 				return {
 					content: [
 						{
 							type: "text",
-							text: "Error: UI not available (running in non-interactive mode). Please re-run in interactive mode.",
+							text: "[No interactive UI available. Please re-run in interactive mode or provide guidance in your next message.]",
 						},
 					],
 					details: {
@@ -85,12 +88,15 @@ export default function askUser(pi: ExtensionAPI) {
 						context: params.context,
 						answer: null,
 						wasCustom: false,
-					} as AskUserDetails,
+						interactive: false,
+					} as AskUserDetails & { interactive: boolean },
 				};
 			}
 
 			const options = params.options ?? [];
-			const displayOptions: DisplayOption[] = options.length > 0 ? [...options.map(normalizeOption), { label: "Type a custom answer", isOther: true }] : [];
+			const displayOptions: DisplayOption[] = options.length > 0 
+				? [...options.map(normalizeOption), { label: "Type a custom answer", isOther: true }] 
+				: [];
 			const simpleOptions = normalizeOptions(options);
 
 			const result = await ctx.ui.custom<{ answer: string; wasCustom: boolean; index?: number } | null>(
@@ -254,20 +260,34 @@ export default function askUser(pi: ExtensionAPI) {
 			);
 
 			if (!result) {
+				// User cancelled - return a clear signal for the LLM to handle
 				return {
-					content: [{ type: "text", text: "User declined to answer" }],
+					content: [
+						{
+							type: "text",
+							text: "[User declined to answer. Continue without this information or try a different approach.]",
+						},
+					],
 					details: {
 						question: params.question,
 						options: simpleOptions,
 						context: params.context,
 						answer: null,
 						wasCustom: false,
-					} as AskUserDetails,
+						interactive: true,
+					} as AskUserDetails & { interactive: boolean },
 				};
 			}
 
+			// Success - return the answer in a format optimized for LLM continuation
+			// The LLM will receive this and can seamlessly continue its response
 			return {
-				content: [{ type: "text", text: `User answered: ${result.answer}` }],
+				content: [
+					{
+						type: "text",
+						text: `[User responded: "${result.answer}"${result.index ? ` (selected option ${result.index})` : ""}. Continue your response incorporating this input.]`,
+					},
+				],
 				details: {
 					question: params.question,
 					options: simpleOptions,
@@ -275,7 +295,8 @@ export default function askUser(pi: ExtensionAPI) {
 					answer: result.answer,
 					wasCustom: result.wasCustom,
 					index: result.index,
-				} as AskUserDetails,
+					interactive: true,
+				} as AskUserDetails & { interactive: boolean },
 			};
 		},
 
@@ -299,26 +320,35 @@ export default function askUser(pi: ExtensionAPI) {
 		},
 
 		renderResult(result, _options, theme, _context) {
-			const details = result.details as AskUserDetails | undefined;
+			const details = result.details as (AskUserDetails & { interactive?: boolean }) | undefined;
+			
 			if (!details) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
 
+			// Non-interactive mode
+			if (details.interactive === false) {
+				return new Text(theme.fg("warning", "⌀ No UI available"), 0, 0);
+			}
+
+			// User cancelled
 			if (details.answer === null) {
 				return new Text(theme.fg("warning", "⌀ Declined to answer"), 0, 0);
 			}
 
+			// Success with custom answer
 			if (details.wasCustom) {
 				return new Text(
 					theme.fg("success", "✓ ") +
 						theme.fg("muted", "(custom) ") +
-						theme.fg("accent", details.answer),
+						theme.fg("accent", `"${details.answer}"`),
 					0,
 					0,
 				);
 			}
 
+			// Success with option selection
 			const idx = details.index ?? 0;
 			return new Text(
 				theme.fg("success", "✓ ") +

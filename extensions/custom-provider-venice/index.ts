@@ -113,13 +113,15 @@ export default async function (pi: ExtensionAPI) {
 	const apiKey = process.env.VENICE_API_KEY;
 
 	if (!apiKey) {
-		throw new Error("VENICE_API_KEY environment variable is not set");
+		console.error("VENICE_API_KEY environment variable is not set");
+		return;
 	}
 
 	const models = await fetchVeniceModels(apiKey);
 
 	if (models.length === 0) {
-		throw new Error("No models with tool call support found in Venice API response");
+		console.error("No models with tool call support found in Venice API response");
+		return;
 	}
 
 	pi.registerProvider("venice", {
