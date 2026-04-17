@@ -1,0 +1,3 @@
+[submodule "git/github.com/davebcn87/pi-autoresearch"]
+	path = git/github.com/davebcn87/pi-autoresearch
+	url = https://github.com/davebcn87/pi-autoresearch.git
