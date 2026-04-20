@@ -3,7 +3,7 @@
   "lastChangelogVersion": "0.65.2",
   "defaultProvider": "minimax",
   "defaultModel": "MiniMax-M2.7-highspeed",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "xhigh",
   "hideThinkingBlock": false,
   "transport": "sse"
 }
