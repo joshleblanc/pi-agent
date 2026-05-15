@@ -1,9 +1,11 @@
 {
-  "packages": [],
-  "lastChangelogVersion": "0.67.6",
+  "packages": [
+    "https://github.com/latent-variable/pi-terminal-bench"
+  ],
+  "lastChangelogVersion": "0.73.0",
   "defaultProvider": "minimax",
-  "defaultModel": "MiniMax-M2.7",
-  "defaultThinkingLevel": "off",
+  "defaultModel": "MiniMax-M2.7-highspeed",
+  "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "transport": "sse"
 }

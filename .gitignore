@@ -1,2 +1,4 @@
 bin/
 sessions/*
+models.json
+settings.json
