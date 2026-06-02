@@ -1,0 +1,182 @@
+version: 1
+plan:
+  name: analyze-and-verify-team-port
+  max_concurrency: 3
+  max_consecutive_failures: 2
+  max_cycles: 5
+  auto_accept: false
+  auto_reject_retries: 1
+  verifier_config:
+    default_verifiers: [verifier]
+tasks:
+  - id: static-review
+    title: Static review of team-agent port
+    prompt: >
+      Read every file in the team-agent pi extension at
+      C:\Users\jlebl\.pi\agent\extensions\team-agent\ and produce a
+      detailed static-analysis report.
+
+      Files to read:
+      - index.ts
+      - board.ts
+      - plan-schema.ts
+      - plan-parser.ts
+      - lead.md, worker.md, verifier.md
+      - references/software-engineering.md
+      - references/deep-research.md
+      - references/report.md
+      - references/commands-windows-powershell.md
+      - references/commands-macos-linux.md
+      - smoke-test.ts
+
+      Report must cover:
+      1. Module structure and dependencies (what imports what)
+      2. Exported tools (registerTool calls) and their parameter schemas
+      3. Slash commands (registerCommand calls)
+      4. State machine: all TaskStatus values and transitions in board.ts
+      5. Persistence: every file the Board writes, and when
+      6. Plan execution flow: how executePlan runs tasks, handles decisions,
+         retries, timeouts, verifiers
+      7. Plan YAML parser: which YAML features it supports and which it does not
+      8. Structural floor checks: which invariants the parser enforces
+      9. Known gaps: anything stubbed, mocked, or marked TODO
+
+      Be specific with line numbers. Cite code. No hand-waving.
+    assigned_to: worker
+    verified_by: verifier
+    verify_prompt: >
+      Independently re-derive the static-analysis report. Open each file
+      yourself and verify the claims. Specifically check:
+
+      - Every registerTool call exists and the parameter schema is valid TypeBox
+      - Every registerCommand call exists and the handler signature is correct
+      - The Board state machine has no unreachable states or missing transitions
+      - State persistence: does persist() get called after every state mutation?
+        Spot-check at least 5 state changes
+      - executePlan: does it actually run tasks in parallel? Trace the call graph
+      - The plan parser: try a YAML with `>`, `|`, `~`, nested verifier_config,
+        multi-verifier array, and a role=verify-as-task task. Confirm it parses
+      - Structural floor: craft a plan where task B has depends_on: [A] and
+        A is verify-skipped. Does the parser reject it?
+
+      Re-run the smoke test (npx tsx smoke-test.ts) and confirm 27/27 pass.
+
+      Re-derive findings, do not just re-read the producer's summary.
+    timeout_ms: 1800000
+
+  - id: mavis-comparison
+    title: Compare port to original mavis implementation
+    prompt: >
+      Compare the pi port at C:\Users\jlebl\.pi\agent\extensions\team-agent\
+      to the original mavis team plan implementation.
+
+      Read these original sources:
+      - C:\Users\jlebl\.mavis\agents\mavis\.builtin-skills\mavis-team\SKILL.md
+      - C:\Users\jlebl\.mavis\agents\mavis\.builtin-skills\mavis-team\references\software-engineering.md
+      - C:\Users\jlebl\.mavis\agents\mavis\.builtin-skills\mavis-team\references\deep-research.md
+      - C:\Users\jlebl\.mavis\agents\mavis\.builtin-skills\mavis-team\references\report.md
+      - C:\Users\jlebl\.mavis\agents\mavis\.builtin-skills\mavis-team\references\commands-windows-powershell.md
+      - A real mavis plan: C:\Users\jlebl\.mavis\plans\plan_2828cc3a\plan.yaml
+      - A real mavis state: C:\Users\jlebl\.mavis\plans\plan_2828cc3a\state.json
+      - A real mavis board: C:\Users\jlebl\.mavis\plans\plan_2828cc3a\board.md
+
+      Build a feature-by-feature comparison table with these columns:
+      | Feature | mavis source | pi port | Match? | Notes |
+
+      Cover at minimum:
+      - Plan YAML schema fields
+      - Verdict keywords
+      - CLI commands (run, status, steer, unblock, extend-timeout, decision, cancel, update)
+      - State machine phases (pending, producing, verifying, evaluating, done, failed)
+      - Decision verdicts (accept, reject, override_accept, manual_retry)
+      - File layout (plan.yaml, state.json, board.md, scratchpad/, outputs/)
+      - Skip-verify semantics (structural floor rules)
+      - Concurrency / max_concurrency
+      - auto_accept behavior
+      - Owner session tracking
+      - Audit sampling (audit_sample_rate)
+      - Reference docs (which are present, which are missing)
+
+      For each row where Match=No, cite the file:line in the port that should
+      be changed.
+    assigned_to: worker
+    verified_by: verifier
+    verify_prompt: >
+      Independently re-verify the feature comparison. For each "Match=No" row,
+      open the cited file:line in the pi port and confirm the gap is real and
+      the fix recommendation is correct.
+
+      Specifically check:
+      - Is the SKILL.md "Hard rule" (user-facing strings in user's language)
+        present in the pi port? Look in lead.md, worker.md, verifier.md.
+      - Does the port support `mavis team plan update <plan_id> <task_id> --verify on|off`?
+        The pi equivalent would be changing a task's verify state mid-plan.
+      - Does the port support audit_sample_rate post-hoc sampling for
+        verify=off tasks?
+      - Does the port's decision flow distinguish between "task is at end of
+        plan" vs "task has downstream dependents"? The original mavis rules
+        are HARD BAN: skip cannot be depended on; HARD BAN: verify-as-task
+        cannot be depended on; REASON REQUIRED: plan-exit skip needs reason.
+      - Does the port write outputs/<task-id>/deliverable.md with the worker's
+        full output, or just a truncated preview?
+      - Does the port log to board.md with timestamps in the same format as
+        mavis?
+    timeout_ms: 1800000
+
+  - id: integration-test
+    title: End-to-end integration test
+    role: verify-as-task
+    prompt: >
+      Run end-to-end integration tests of the team-agent extension. The
+      deliverable IS the test report.
+
+      Run these tests and report results for each:
+
+      1. Smoke test:
+         cd C:\Users\jlebl\.pi\agent\extensions\team-agent\
+         npx tsx smoke-test.ts
+         Confirm 27/27 pass.
+
+      2. Plan parser on real mavis plans:
+         - C:\Users\jlebl\.mavis\plans\plan_2828cc3a\plan.yaml
+         - C:\Users\jlebl\.mavis\plans\plan_04839864\plan.yaml
+         - C:\Users\jlebl\.mavis\plans\plan_34b28a61\plan.yaml
+         - C:\Users\jlebl\.mavis\plans\plan_64375aeb\plan.yaml
+         For each: report parse errors (must be 0), task count, dependency
+         graph summary.
+
+      3. Plan execution with stub agents:
+         Write a small Node script that:
+         - Constructs a Plan object in memory with 3 tasks (one with depends_on,
+           one with role=verify-as-task, one with verified_by: ~)
+         - Instantiates a Board with PI_TEAM_STATE_DIR set to a temp dir
+         - Calls board.startTask, board.completeTask, board.startVerifying,
+           board.recordVerifierResult, board.processVerifierResults for each
+         - Confirms state transitions, state.json contents, board.md contents
+         - Runs board.processDecision with a Decision and confirms new tasks
+           are added with correct status
+         - Runs board.cancel and confirms plan is cancelled
+         Report any unexpected behavior.
+
+      4. Extension load check:
+         The extension is loaded by pi. Verify the file paths and exports
+         are correct:
+         - C:\Users\jlebl\.pi\agent\extensions\team-agent\index.ts
+           must have `export default function`
+         - The team tool must be registered with name "team"
+         - The state dir default must be ~/.pi/team/plans
+
+      5. Edge cases to verify:
+         - Empty plan (no tasks) — parser should error
+         - Plan with 0 max_cycles — should default to 10
+         - Task with timeout_ms=0 — should default to 1800000
+         - Plan with no verifier_config but task without verified_by —
+           should fall back to default_verifiers
+
+      For each test, report PASS/FAIL with evidence.
+    assigned_to: verifier
+    verified_by: ~
+    verify_skip_reason: >
+      This task IS the verification — the deliverable is the test report.
+      No need to wrap another verifier around it.
+    timeout_ms: 1800000

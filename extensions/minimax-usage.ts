@@ -25,10 +25,41 @@ interface ModelRemain {
   current_interval_usage_count: number;
   model_name: string;
   group_name?: string;
+  // New format fields
+  current_interval_status?: number;
+  current_interval_remaining_percent?: number;
+  current_weekly_total_count?: number;
+  current_weekly_usage_count?: number;
+  weekly_start_time?: number;
+  weekly_end_time?: number;
+  weekly_remains_time?: number;
+  current_weekly_status?: number;
+  current_weekly_remaining_percent?: number;
 }
 
 interface UsageResponse {
   model_remains: ModelRemain[];
+}
+
+type StatusKind = "ok" | "warn" | "bad" | "unknown";
+
+function statusKind(status: number | undefined): StatusKind {
+  if (status === undefined) return "unknown";
+  // Heuristic: 1 = active, 2 = warning, 3 = exhausted (observed values)
+  if (status === 1) return "ok";
+  if (status === 2) return "warn";
+  if (status >= 3) return "bad";
+  return "unknown";
+}
+
+function fmtPercent(value: number | undefined): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return "?";
+  return value.toFixed(0) + "%";
+}
+
+function usedPercent(remaining: number | undefined): number | undefined {
+  if (remaining === undefined || remaining === null || Number.isNaN(remaining)) return undefined;
+  return Math.max(0, Math.min(100, 100 - remaining));
 }
 
 interface PlanInfo {
@@ -98,26 +129,35 @@ export default function (pi: ExtensionAPI) {
 
       // Find coding plan (minimax-* models)
       const codingPlan = usage.model_remains.find(
-        (m) => m.model_name && PLAN_TYPES[0].modelPattern.test(m.model_name)
+        (m) => m.model_name === "general"
       );
 
       if (codingPlan) {
-        const percent = Math.abs(
-          codingPlan.current_interval_usage_count - codingPlan.current_interval_total_count
-        ) / codingPlan.current_interval_total_count;
-        const timeRemainingMs = codingPlan.remains_time;
-
-        const percentFormatted = (percent * 100).toFixed(2) + "%";
-        const timeRemainingFormatted = humanizeTime(timeRemainingMs);
+        const intervalPct = resolveIntervalUsedPercent(codingPlan);
+        const intervalTime = humanizeTime(codingPlan.remains_time);
+        const intervalStatus = statusKind(codingPlan.current_interval_status);
+        const weeklyPct = resolveWeeklyUsedPercent(codingPlan);
+        const weeklyTime = humanizeTime(codingPlan.weekly_remains_time ?? 0);
 
         const theme = ctx.ui.theme;
+        const intervalColor =
+          intervalStatus === "ok" ? "success" :
+          intervalStatus === "warn" ? "warning" :
+          intervalStatus === "bad" ? "error" : "dim";
+        const weeklyColor =
+          (codingPlan.current_weekly_status ?? 1) === 1 ? "success" : "warning";
+
         const statusText =
           theme.fg("accent", "◉ ") +
-          theme.fg("text", "MiniMax Coding") +
-          theme.fg("dim", " | ") +
-          theme.fg("success", percentFormatted) +
-          theme.fg("dim", " | ") +
-          theme.fg("warning", timeRemainingFormatted);
+          theme.fg("text", "MiniMax") +
+          theme.fg("dim", " [") +
+          theme.fg(intervalColor, fmtPercent(intervalPct)) +
+          theme.fg("dim", "/") +
+          theme.fg(weeklyColor, fmtPercent(weeklyPct)) +
+          theme.fg("dim", "] ") +
+          theme.fg("dim", intervalTime) +
+          theme.fg("dim", " | wk ") +
+          theme.fg("dim", weeklyTime);
 
         ctx.ui.setStatus("coding-plan-percent", statusText);
       }
@@ -132,6 +172,30 @@ export default function (pi: ExtensionAPI) {
     enabled = false;
     clearInterval(interval);
     ctx.ui.setStatus("coding-plan-percent", "");
+  }
+
+  function resolveIntervalUsedPercent(plan: ModelRemain): number | undefined {
+    if (plan.current_interval_remaining_percent !== undefined) {
+      return usedPercent(plan.current_interval_remaining_percent);
+    }
+    const total = plan.current_interval_total_count;
+    const used = plan.current_interval_usage_count;
+    if (total > 0) {
+      return Math.max(0, Math.min(100, (used / total) * 100));
+    }
+    return undefined;
+  }
+
+  function resolveWeeklyUsedPercent(plan: ModelRemain): number | undefined {
+    if (plan.current_weekly_remaining_percent !== undefined) {
+      return usedPercent(plan.current_weekly_remaining_percent);
+    }
+    const total = plan.current_weekly_total_count ?? 0;
+    const used = plan.current_weekly_usage_count ?? 0;
+    if (total > 0) {
+      return Math.max(0, Math.min(100, (used / total) * 100));
+    }
+    return undefined;
   }
 
   function humanizeTime(ms: number): string {
@@ -157,15 +221,22 @@ export default function (pi: ExtensionAPI) {
   }
 
   function formatPlanUsage(plan: ModelRemain, planInfo: PlanInfo): string {
-    const percent = Math.abs(
-      plan.current_interval_usage_count - plan.current_interval_total_count
-    ) / plan.current_interval_total_count;
-    const percentFormatted = (percent * 100).toFixed(1) + "%";
-    const used = plan.current_interval_usage_count;
-    const total = plan.current_interval_total_count;
-    const remaining = total - used;
+    const intervalPct = resolveIntervalUsedPercent(plan);
+    const intervalTime = humanizeTime(plan.remains_time);
+    const weeklyPct = resolveWeeklyUsedPercent(plan);
+    const weeklyTime = humanizeTime(plan.weekly_remains_time ?? 0);
+    const intervalStatus = statusKind(plan.current_interval_status);
 
-    return `${planInfo.icon} ${planInfo.displayName}: ${percentFormatted} (${remaining}/${total}) - ${humanizeTime(plan.remains_time)}`;
+    const intervalTag =
+      intervalStatus === "ok" ? "✓" :
+      intervalStatus === "warn" ? "!" :
+      intervalStatus === "bad" ? "✗" : "?";
+
+    return [
+      `${planInfo.icon} ${planInfo.displayName}`,
+      `  interval: ${fmtPercent(intervalPct)} used ${intervalTag} (resets in ${intervalTime})`,
+      `  weekly:   ${fmtPercent(weeklyPct)} used (resets in ${weeklyTime}) [status ${plan.current_weekly_status ?? "?"}]`,
+    ].join("\n");
   }
 
   // Enable on startup if using MiniMax model
