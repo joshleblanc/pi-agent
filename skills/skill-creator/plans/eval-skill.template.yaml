@@ -1,0 +1,90 @@
+# Team Engine plan template — 评测一个 skill
+#
+# 用法: 把 <SKILL_NAME> / <SKILL_PATH> / <EVAL_PROMPT> 替换成实际值，
+#       然后用 `team` 工具加载这个文件：
+#         team { plan_file: "<this-file>" }
+#
+# (mavis 时代用 `mavis team plan run <this-file>`；pi 改用运行时 `team` 工具)
+#
+# 设计来源: skill-creator SKILL.md 第 6 步。
+# 不抄 Anthropic 的 evals.json schema；产出全在 scratchpad + CycleReport。
+
+version: 1
+plan:
+  name: 'Eval skill: <SKILL_NAME>'
+  max_concurrency: 3
+  max_consecutive_failures: 3
+  max_cycles: 3
+
+tasks:
+  # Producer：用待评 skill 跑 eval prompt
+  - id: producer-with-skill
+    title: 'Run eval with skill'
+    prompt: |
+      请使用位于 <SKILL_PATH> 的 skill 来处理以下任务。
+      把所有产出（文件、消息、决策）写到 scratchpad，并在最后用一句话总结输出。
+
+      任务：
+      <EVAL_PROMPT>
+
+      执行约束：
+      - 必须实际加载并使用该 skill 的 SKILL.md
+      - 不要使用其他相邻 skill
+      - 完成后写 deliverable.md 总结：用了哪些 procedure 步骤、产出是什么、有没有遇到 skill 不清楚的地方
+    assigned_to: general
+    verified_by: reviewer
+    verify_prompt: |
+      检查：
+      1. producer 是否真的加载了 <SKILL_PATH> 的 SKILL.md（不是凭印象做）
+      2. 产出是否符合该 skill 的 output contract
+      3. deliverable.md 是否记录了执行细节
+      不强制要求"答得好"，只要求"按 skill 走"。
+
+  # Baseline：不用 skill 跑同一 prompt
+  - id: baseline-no-skill
+    title: 'Run eval without skill (baseline)'
+    prompt: |
+      请处理以下任务，不使用任何 skill，凭你自己的判断完成。
+
+      任务：
+      <EVAL_PROMPT>
+
+      执行约束：
+      - 不要加载任何 skill
+      - 完成后写 deliverable.md 总结：你的判断步骤、产出是什么
+    assigned_to: general
+    verified_by: reviewer
+    verify_prompt: |
+      检查：
+      1. baseline 是否完成了任务（不强制要求格式）
+      2. deliverable.md 是否记录了判断过程
+
+  # Compare：对比两个产出，给评分和改进建议
+  - id: compare
+    title: 'Compare with-skill vs baseline, output verdict'
+    prompt: |
+      请对比以下两个 producer 的产出：
+
+      - with-skill 产出：见同 plan 的 producer-with-skill 任务的 scratchpad 与 deliverable.md
+      - baseline 产出：见同 plan 的 baseline-no-skill 任务的 scratchpad 与 deliverable.md
+
+      你的任务是写一份对比报告 deliverable.md，包含：
+
+      1. **with-skill 是否真的更好？**（明确结论：yes / no / mixed）
+      2. **如果更好，好在哪？**（具体到步骤或输出契约）
+      3. **如果没更好或更差，为什么？**（skill 是否引入了不必要的步骤、过拟合到固定格式、限制了模型判断）
+      4. **改进建议**：列 3-5 条对 SKILL.md 或 references/ 的具体改动建议
+      5. **该不该 bundle 脚本？**（看 with-skill producer 的 scratchpad，是否在反复做某个确定性动作）
+
+      重点找：
+      - skill 是否引入冗余步骤
+      - 输出契约是否更稳定
+      - token 使用是否合理（with-skill 不该比 baseline 多耗一倍以上 token 而没有质量提升）
+    assigned_to: reviewer
+    verified_by: reviewer
+    verify_prompt: |
+      检查 deliverable.md：
+      1. 5 个章节是否齐全
+      2. 结论是否明确（不是"看起来还行"这种模糊话）
+      3. 改进建议是否具体到文件/章节
+    depends_on: [producer-with-skill, baseline-no-skill]
